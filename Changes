@@ -1,0 +1,82 @@
+Revision history for Switch-Declare
+
+0.06    2026-06-19
+        - New `case PATTERN -> [..] / {..}` destructuring bind: a matching arm
+          can destructure the topic into lexicals private to that arm's block.
+          Supports the full Destructure::Declare grammar (nested patterns,
+          `undef` holes, `//` defaults, trailing `@rest` / `%rest`). The topic
+          is read once into a hidden temp; bindings lower to plain
+          `my $x = $tmp->[i]` statements with no cost until the arm runs. A flat
+          array binding takes a fast path - a single native
+          `my (...) = @{$topic // []}` list-assignment - so it runs at
+          hand-written speed (a constant scrutinee, which can never match a
+          [..] arm, keeps the safe per-element path).
+        - The destructuring engine is Destructure::Declare's destructure.h,
+          pulled in at build time via ExtUtils::Depends.
+
+0.05    2026-06-19
+        - Fix compile failure on perl 5.14 and 5.16 introduced by the 0.04
+          scalar-variable patterns (`case == $x` / `case eq $x` / `case =~ $rx`):
+          * pad_findmy_pvn (5.15.1+) is now shimmed back to Perl_pad_findmy on
+            5.14, matching the existing pad_add_name_pvn shim.
+          * the `our` pad-name resolution no longer uses the PADNAME API
+            (5.18+); it now uses the version-stable PAD_COMPNAME_FLAGS_isOUR /
+            PAD_COMPNAME_OURSTASH macros, a single code path on all perls.
+
+0.04    2026-06-14
+        - New patterns:
+          * `case FOO`             - a bareword naming an inlinable `use constant`
+            folds to its value at compile time and is classified like the literal
+            it holds (numeric -> ==, string -> eq; dispatch-eligible). Zero runtime
+            cost. Package-qualified constants (`Pkg::FOO`) are supported.
+          * `case == $x` / `case eq $x` - compare the topic against a runtime
+            scalar variable, naming the operator as in Perl itself: `==` is
+            numeric (looks_like_number-guarded on both sides), `eq` is string.
+            The operand is a plain scalar ($name or $Pkg::name), including `our`
+            and package globals. Both are undef/type-safe and warning-free.
+          * `case =~ $rx` - match the topic against a runtime pattern (a qr// or
+            a string) held in a scalar, complementing the compile-time /literal/
+            form. Undef-safe and warning-free. As a runtime membership test it
+            does not set capture variables ($1, @+); for captures use a predicate
+            arm, `case sub { $_[0] =~ $rx }`.
+
+0.03    2026-06-14
+        - New patterns:
+          * `case undef`           - matches an undefined topic.
+          * `case ref(TYPE)` / `ref`     - ref($topic) [eq "TYPE"]; bare = any ref.
+          * `case reftype(TYPE)` / `reftype` - underlying type, through blessing.
+          * `case isa(Class)`      - blessed object derived from Class (fast @ISA).
+        - Undef/type safety: every pattern is now warning-free. An undef topic
+          matches only `case undef` (else falls to default) instead of warning
+          and mis-matching `case 0`/`case ""`. Numeric patterns are guarded by
+          looks_like_number, so a non-numeric topic neither warns ("Argument
+          isn't numeric") nor mis-matches (`"one" == 0` was true; now it is not).
+        - The numeric guard is computed once per switch (hoisted), so numeric
+          switches run on par with an equivalently type-safe hand-written chain.
+
+0.02    2026-06-13
+        - Fix load failure on perl 5.14-5.20.
+
+0.01    2026-06-12
+        First release.
+        - `switch (EXPR) { case PAT { ... } ... default { ... } }` as a real
+          lexical pragma, recognised only within `use Switch::Declare` scope.
+        - Compile-time keyword plugin; the construct lowers to a native
+          conditional expression. No source filter, no smartmatch, no CPAN
+          dependencies (core perl 5.14+ only).
+        - Pattern kinds: number (==), string (eq), regex /.../imsx, range
+          [LO..HI], list [a,b,c] membership, and predicates - either \&name
+          (also package-qualified, \&Pkg::name) or an inline sub { ... } that
+          closes over the enclosing lexicals. Each lowers to native ops (regex
+          compiles to a real OP_MATCH at compile time); there are no runtime
+          helper subs.
+        - Statement and expression (value-returning) forms; usable infix.
+        - Scrutinee evaluated exactly once; first matching case wins; optional
+          trailing default.
+        - Fast path: a plain variable/constant scrutinee with single-expression
+          arms compiles to exactly a hand-written if/elsif chain (0-2% in the
+          bundled benchmark).
+        - Dispatch mode: a string-keyed lookup table (>= 4 arms, constant
+          values) compiles to a single O(1) hash lookup against a compile-time
+          hash - ~2.5x faster than the if/elsif chain at 20 arms. Chosen
+          automatically; never changes behaviour.
